@@ -1,0 +1,14 @@
+{
+  "name": "sales-tracker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "install:all": "cd client && npm install",
+    "dev": "cd client && npm run dev",
+    "build": "cd client && npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
