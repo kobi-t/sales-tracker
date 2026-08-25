@@ -29,6 +29,7 @@ export const RANGE_OPTIONS = [
   { value: "last3", label: "Last 3 Months" },
   { value: "last6", label: "Last 6 Months" },
   { value: "year", label: "This Year" },
+  { value: "all", label: "All Time" },
   { value: "custom", label: "Custom Range" },
 ];
 
@@ -38,12 +39,22 @@ export const DEFAULT_RANGE = "month";
  * Resolve a range option into concrete ISO dates.
  * Returns { start, end, prevStart, prevEnd, label } where prevStart/prevEnd are
  * an equal-length period immediately preceding `start`, used for trend arrows.
+ *
+ * `allDates` is only consulted for the "All Time" option, which spans the
+ * earliest record to today. Without it, All Time falls back to this year.
  */
-export function resolveRange(rangeValue, customStart, customEnd) {
+export function resolveRange(rangeValue, customStart, customEnd, allDates) {
   const now = new Date();
   let start, end, label;
 
   switch (rangeValue) {
+    case "all": {
+      const dates = (allDates || []).filter(Boolean).map((d) => String(d).slice(0, 10));
+      start = dates.length ? parseISO(dates.reduce((a, b) => (a < b ? a : b))) : startOfYear(now);
+      end = startOfDay(now);
+      label = "All Time";
+      break;
+    }
     case "week":
       start = startOfWeek(now);
       end = startOfDay(now);

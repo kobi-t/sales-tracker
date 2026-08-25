@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { DEFAULT_RANGE, RANGE_OPTIONS, resolveRange } from "../utils/dateRange";
 
-/** Hook that owns range state and hands back the resolved ISO boundaries. */
-export function useDateRange(initial = DEFAULT_RANGE) {
+/**
+ * Hook that owns range state and hands back the resolved ISO boundaries.
+ * `allDates` lets the "All Time" option span back to the earliest record.
+ */
+export function useDateRange(initial = DEFAULT_RANGE, allDates) {
   const [range, setRange] = useState(initial);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
 
-  const resolved = resolveRange(range, customStart, customEnd);
+  const resolved = resolveRange(range, customStart, customEnd, allDates);
 
   return {
     ...resolved,

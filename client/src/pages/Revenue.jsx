@@ -12,7 +12,12 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 export default function Revenue() {
   const { clients, payments, payouts, settings, refresh } = useData();
-  const { start, end, label, selectorProps } = useDateRange();
+
+  const allDates = useMemo(
+    () => [...(payments || []), ...(payouts || [])].map((r) => r.date),
+    [payments, payouts]
+  );
+  const { start, end, label, selectorProps } = useDateRange("month", allDates);
 
   const [editingPayout, setEditingPayout] = useState(null);
   const [confirmDeletePayout, setConfirmDeletePayout] = useState(null);

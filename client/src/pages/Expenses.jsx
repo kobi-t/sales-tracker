@@ -12,7 +12,9 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 export default function Expenses() {
   const { expenses, settings, refresh } = useData();
-  const { start, end, label, selectorProps } = useDateRange();
+
+  const allDates = useMemo(() => (expenses || []).map((e) => e.date), [expenses]);
+  const { start, end, label, selectorProps } = useDateRange("month", allDates);
 
   const [showIndividual, setShowIndividual] = useState(false);
   const [filterCategory, setFilterCategory] = useState("all");

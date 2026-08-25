@@ -1,17 +1,21 @@
 import { useMemo, useState } from "react";
-import { Pencil, Plus, Trash2, UserPlus } from "lucide-react";
+import { Pencil, Play, Plus, Trash2, UserPlus } from "lucide-react";
 import { api } from "../api";
+import DateRangeSelector, { useDateRange } from "../components/DateRangeSelector";
 import {
   Card, ColorBadge, ConfirmDialog, Field, KpiCard, Modal, SortHeader,
 } from "../components/ui";
 import { useData } from "../store";
 import { fmtCurrency, fmtDate } from "../utils/format";
-import { computeCallMetrics } from "../utils/metrics";
+import { computeCallMetrics, filterByRange } from "../utils/metrics";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
 export default function CallLog() {
   const { calls, settings, refresh } = useData();
+
+  const allDates = useMemo(() => (calls || []).map((c) => c.date), [calls]);
+  const { start, end, label, selectorProps } = useDateRange("month", allDates);
 
   const [sortKey, setSortKey] = useState("date");
   const [sortDir, setSortDir] = useState("desc");
@@ -23,9 +27,12 @@ export default function CallLog() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
+  // Date range narrows the set first; the KPI cards above the table are
+  // computed from exactly the rows on screen.
+  const inRange = useMemo(() => filterByRange(calls || [], start, end), [calls, start, end]);
+
   const filtered = useMemo(() => {
-    if (!calls) return [];
-    let rows = calls;
+    let rows = inRange;
     if (filterSource !== "all") rows = rows.filter((c) => c.source === filterSource);
     if (filterOutcome !== "all") rows = rows.filter((c) => c.outcome === filterOutcome);
     return [...rows].sort((a, b) => {
@@ -36,7 +43,7 @@ export default function CallLog() {
       else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [calls, filterSource, filterOutcome, sortKey, sortDir]);
+  }, [inRange, filterSource, filterOutcome, sortKey, sortDir]);
 
   if (!calls || !settings) return <div className="loading-wrap">Loading call log…</div>;
 
@@ -59,6 +66,7 @@ export default function CallLog() {
       outcome: outcomes[0] || "Follow Up",
       notes: "",
       deal_value: 0,
+      recording_link: "",
     });
   }
 
@@ -73,6 +81,7 @@ export default function CallLog() {
         outcome: editing.outcome,
         notes: editing.notes || "",
         deal_value: Number(editing.deal_value) || 0,
+        recording_link: (editing.recording_link || "").trim(),
       };
       if (editing.id) await api.updateCall(editing.id, payload);
       else await api.createCall(payload);
@@ -121,9 +130,12 @@ export default function CallLog() {
       <div className="page-header">
         <div>
           <div className="page-title">Call Log</div>
-          <div className="page-subtitle">{calls.length} calls logged · prospects and sales calls only</div>
+          <div className="page-subtitle">{label} · {start} to {end} · prospects and sales calls only</div>
         </div>
-        <button className="btn btn-primary" onClick={openCreate}><Plus size={15} /> Add Call</button>
+        <div className="header-actions">
+          <DateRangeSelector {...selectorProps} />
+          <button className="btn btn-primary" onClick={openCreate}><Plus size={15} /> Add Call</button>
+        </div>
       </div>
 
       <div className="kpi-grid">
@@ -148,7 +160,7 @@ export default function CallLog() {
             {outcomes.map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
         </div>
-        <div className="muted">{filtered.length} of {calls.length} shown</div>
+        <div className="muted">{filtered.length} of {inRange.length} in {label}</div>
       </div>
 
       <Card bodyClass="">
@@ -161,13 +173,22 @@ export default function CallLog() {
                 <SortHeader label="Lead Source" column="source" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader label="Outcome" column="outcome" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortHeader label="Deal Value" column="deal_value" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                <th className="ta-center">Recording</th>
                 <th>Notes</th>
                 <th className="ta-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={7}><div className="empty-state">No calls match these filters.</div></td></tr>
+                <tr>
+                  <td colSpan={8}>
+                    <div className="empty-state">
+                      {inRange.length === 0
+                        ? `No calls in ${label}.`
+                        : "No calls match these filters."}
+                    </div>
+                  </td>
+                </tr>
               )}
               {filtered.map((c) => {
                 const isClosed = closedOutcomes.includes(c.outcome);
@@ -182,6 +203,21 @@ export default function CallLog() {
                     <td><ColorBadge label={c.outcome} colors={settings.outcomeColors} /></td>
                     <td className="ta-right">
                       {Number(c.deal_value) > 0 ? fmtCurrency(c.deal_value) : <span className="dash">—</span>}
+                    </td>
+                    <td className="ta-center">
+                      {/* Empty cell when there is no recording — no icon, no button. */}
+                      {c.recording_link ? (
+                        <a
+                          className="play-btn"
+                          href={c.recording_link}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Play recording"
+                          aria-label={`Play recording for ${c.name || "this call"}`}
+                        >
+                          <Play size={14} />
+                        </a>
+                      ) : null}
                     </td>
                     <td className="cell-muted cell-notes">{c.notes || c.call_summary || ""}</td>
                     <td>
@@ -249,6 +285,15 @@ export default function CallLog() {
             <Field label="Deal Value ($) — optional">
               <input type="number" min="0" step="0.01" value={editing.deal_value ?? 0}
                 onChange={(e) => setEditing({ ...editing, deal_value: e.target.value })} />
+            </Field>
+            <Field label="Recording Link" full>
+              <input
+                type="url"
+                placeholder="https://…"
+                value={editing.recording_link || ""}
+                onChange={(e) => setEditing({ ...editing, recording_link: e.target.value })}
+              />
+              <span className="field-hint">Optional. Shows a play button on the call row.</span>
             </Field>
             <Field label="Notes" full>
               <textarea rows={3} value={editing.notes || ""} onChange={(e) => setEditing({ ...editing, notes: e.target.value })} />

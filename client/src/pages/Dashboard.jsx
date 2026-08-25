@@ -14,7 +14,12 @@ import {
 
 export default function Dashboard() {
   const { calls, clients, payments, payouts, expenses, settings } = useData();
-  const { start, end, prevStart, prevEnd, label, selectorProps } = useDateRange();
+
+  const allDates = useMemo(
+    () => [...(calls || []), ...(payments || []), ...(payouts || []), ...(expenses || [])].map((r) => r.date),
+    [calls, payments, payouts, expenses]
+  );
+  const { start, end, prevStart, prevEnd, label, selectorProps } = useDateRange("month", allDates);
 
   const ready = calls && clients && payments && payouts && expenses && settings;
 
