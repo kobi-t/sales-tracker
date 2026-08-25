@@ -55,7 +55,12 @@ export function fmtDate(iso) {
 }
 
 export function initials(name) {
-  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  // Strip punctuation so a label like "Recurring payments (pre-tracker)"
+  // reads as RP rather than R(.
+  const parts = String(name || "")
+    .split(/\s+/)
+    .map((p) => p.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter(Boolean);
   if (!parts.length) return "?";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
