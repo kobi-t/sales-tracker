@@ -27,8 +27,9 @@ export default function Dashboard() {
       const call = computeCallMetrics(callsIn, settings);
       const revenue = computeRevenueMetrics(payments, clients, from, to);
       const expense = computeExpenseMetrics(expensesIn);
+      // ROAS is measured on agreed revenue; profit on cash actually banked.
       const acquisition = computeAcquisitionMetrics(call, revenue.total, expense);
-      const { profit, margin } = computeProfit(revenue.total, expense.total);
+      const { profit, margin } = computeProfit(revenue.totalCash, expense.total);
       return { callsIn, expensesIn, call, revenue, expense, acquisition, profit, margin };
     };
 
@@ -67,6 +68,8 @@ export default function Dashboard() {
       <div className="section-label">Revenue &amp; Profit</div>
       <div className="kpi-grid">
         <KpiCard label="Total Revenue" value={revenue.total} prevValue={previous.revenue.total} format="currency" />
+        <KpiCard label="Cash Collected" value={revenue.totalCash} prevValue={previous.revenue.totalCash} format="currency" />
+        <KpiCard label="Outstanding" value={revenue.outstanding} prevValue={previous.revenue.outstanding} format="currency" invertTrend />
         <KpiCard label="Total Expenses" value={expense.total} prevValue={previous.expense.total} format="currency" invertTrend />
         <KpiCard label="Profit" value={profit} prevValue={previous.profit} format="currency" />
         <KpiCard label="Profit Margin" value={margin} prevValue={previous.margin} format="percent" />
@@ -78,6 +81,10 @@ export default function Dashboard() {
           format="currency"
           hint={activeClients ? `${activeClients} active clients` : "No active clients"}
         />
+      </div>
+      <div className="section-note">
+        Profit is <strong>cash collected minus expenses</strong> — money actually banked. ROAS below
+        uses <strong>agreed revenue</strong>.
       </div>
 
       {/* ---- Section B: Sales Performance ---- */}
@@ -110,7 +117,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid-2">
-        <Card title="Revenue vs Expenses" subtitle={label}>
+        <Card title="Revenue, Cash & Expenses" subtitle={label}>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={series} margin={{ top: 6, right: 8, bottom: 0, left: -8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#ececf1" vertical={false} />
@@ -120,6 +127,7 @@ export default function Dashboard() {
               <Tooltip formatter={(v) => fmtCurrency(v)} contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#5b5bf6" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="cash" name="Cash Collected" stroke="#16a34a" strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="expenses" name="Expenses" stroke="#dc2626" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>

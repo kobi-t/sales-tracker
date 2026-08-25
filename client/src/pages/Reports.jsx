@@ -6,7 +6,7 @@ import { monthBounds } from "../utils/dateRange";
 import { DASH, fmtCurrency, fmtMultiple, fmtPercent } from "../utils/format";
 import {
   computeAcquisitionMetrics, computeCallMetrics, computeExpenseMetrics, computeProfit,
-  computeRevenueMetrics, downloadCSV, filterByRange, toCSV,
+  computeRevenueMetrics, downloadCSV, filterByRange, paymentCash, paymentRevenue, toCSV,
 } from "../utils/metrics";
 
 export default function Reports() {
@@ -28,7 +28,7 @@ export default function Reports() {
     const revenue = computeRevenueMetrics(payments, clients, start, end);
     const expense = computeExpenseMetrics(expensesIn);
     const acquisition = computeAcquisitionMetrics(call, revenue.total, expense);
-    const { profit, margin } = computeProfit(revenue.total, expense.total);
+    const { profit, margin } = computeProfit(revenue.totalCash, expense.total);
 
     return { start, end, label, callsIn, expensesIn, paymentsIn, clientsIn, call, revenue, expense, acquisition, profit, margin };
   }, [calls, clients, payments, expenses, settings, month]);
@@ -58,7 +58,9 @@ export default function Reports() {
         { label: "Date", value: (r) => r.date },
         { label: "Client", value: (r) => r.client_name },
         { label: "Category", value: (r) => r.category },
-        { label: "Amount", value: (r) => r.amount },
+        { label: "Revenue", value: (r) => paymentRevenue(r).toFixed(2) },
+        { label: "Cash Collected", value: (r) => paymentCash(r).toFixed(2) },
+        { label: "Outstanding", value: (r) => (paymentRevenue(r) - paymentCash(r)).toFixed(2) },
         { label: "Notes", value: (r) => r.notes || "" },
       ])),
     },
@@ -94,9 +96,13 @@ export default function Reports() {
           return v;
         };
         const rows = [
-          ["Revenue", "Total Revenue", csvValue(revenue.total, "money")],
+          ["Revenue", "Total Revenue (agreed deal value)", csvValue(revenue.total, "money")],
+          ["Revenue", "Total Cash Collected (money received)", csvValue(revenue.totalCash, "money")],
+          ["Revenue", "Outstanding (revenue not yet collected)", csvValue(revenue.outstanding, "money")],
           ["Revenue", "New Client Revenue", csvValue(revenue.newClientRev, "money")],
+          ["Revenue", "New Client Cash Collected", csvValue(revenue.newClientCash, "money")],
           ["Revenue", "Existing Client Revenue", csvValue(revenue.existingRev, "money")],
+          ["Revenue", "Existing Client Cash Collected", csvValue(revenue.existingCash, "money")],
           ["Revenue", "Number of Payments", paymentsIn.length],
           ["Revenue", "New Clients Acquired", clientsIn.length],
           ["Expenses", "Total Expenses", csvValue(expense.total, "money")],
@@ -104,8 +110,8 @@ export default function Reports() {
           ["Expenses", "Other Expenses", csvValue(expense.total - expense.adSpend, "money")],
           ["Expenses", "Number of Expenses", expensesIn.length],
           ...Object.entries(expense.byCategory).map(([cat, amt]) => ["Expenses", `Category: ${cat}`, csvValue(amt, "money")]),
-          ["Profitability", "Profit", csvValue(profit, "money")],
-          ["Profitability", "Profit Margin (%)", csvValue(margin, "percent")],
+          ["Profitability", "Profit (cash collected - expenses)", csvValue(profit, "money")],
+          ["Profitability", "Profit Margin % (of cash collected)", csvValue(margin, "percent")],
           ["Sales", "Calls Booked", call.total],
           ["Sales", "Calls Attended", call.attended],
           ["Sales", "No Shows", call.noShows],
@@ -119,7 +125,7 @@ export default function Reports() {
           ["Acquisition", "Cost per Booked Call", csvValue(acquisition.costPerBookedCall, "money")],
           ["Acquisition", "Cost per Attended Call", csvValue(acquisition.costPerAttendedCall, "money")],
           ["Acquisition", "Cost per New Client", csvValue(acquisition.costPerClient, "money")],
-          ["Acquisition", "ROAS", csvValue(acquisition.roas, "multiple")],
+          ["Acquisition", "ROAS (revenue / ad spend)", csvValue(acquisition.roas, "multiple")],
           ["Acquisition", "Revenue per Booked Call", csvValue(acquisition.revPerBookedCall, "money")],
           ["Acquisition", "Revenue per Attended Call", csvValue(acquisition.revPerAttendedCall, "money")],
         ].map(([section, metric, value]) => ({ section, metric, value }));
@@ -147,12 +153,17 @@ export default function Reports() {
         <Card title="Revenue & Profit" subtitle={label}>
           <div className="stat-row">
             <Stat label="Total Revenue" value={revenue.total} format="currency" />
+            <Stat label="Cash Collected" value={revenue.totalCash} format="currency" />
+            <Stat label="Outstanding" value={revenue.outstanding} format="currency" />
             <Stat label="New Client Revenue" value={revenue.newClientRev} format="currency" />
             <Stat label="Existing Client Revenue" value={revenue.existingRev} format="currency" />
             <Stat label="Total Expenses" value={expense.total} format="currency" />
             <Stat label="Profit" value={profit} format="currency" tone={profit < 0 ? "negative" : "positive"} />
             <Stat label="Profit Margin" value={margin} format="percent" />
           </div>
+          <p className="mapping-note">
+            Profit = cash collected − expenses. Margin is measured against cash collected.
+          </p>
         </Card>
 
         <Card title="Sales & Acquisition" subtitle={label}>
@@ -166,6 +177,7 @@ export default function Reports() {
             <Stat label="Cost / New Client" value={acquisition.costPerClient} format="currency" />
             <Stat label="ROAS" value={acquisition.roas} format="multiple" />
           </div>
+          <p className="mapping-note">ROAS = agreed revenue ÷ ad spend.</p>
         </Card>
       </div>
 

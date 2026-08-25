@@ -81,8 +81,27 @@ export function computeCallMetrics(calls, settings) {
 }
 
 /**
+ * Two numbers are tracked per payment and must never be conflated:
+ *
+ *   revenue = the full deal value agreed
+ *   cash    = the money actually received so far (DB column `amount`)
+ *
+ * They differ whenever a client pays in splits or instalments, and the gap
+ * between them is the outstanding balance.
+ */
+export function paymentRevenue(p) {
+  // Falls back to cash for rows written before the revenue column existed.
+  return num(p.revenue ?? p.amount);
+}
+
+export function paymentCash(p) {
+  return num(p.amount);
+}
+
+/**
  * Revenue for a period, split by whether the paying client was acquired inside
- * that period (new) or before it (existing).
+ * that period (new) or before it (existing). Every figure is reported twice:
+ * once as agreed revenue, once as cash collected.
  */
 export function computeRevenueMetrics(payments, clients, periodStart, periodEnd) {
   const inPeriod = periodStart && periodEnd
@@ -93,25 +112,56 @@ export function computeRevenueMetrics(payments, clients, periodStart, periodEnd)
   for (const c of clients || []) acquiredBy.set(c.id, String(c.date_acquired || "").slice(0, 10));
 
   let total = 0;
+  let totalCash = 0;
   let newClientRev = 0;
   let existingRev = 0;
+  let newClientCash = 0;
+  let existingCash = 0;
   const byClient = {};
   const byCategory = {};
 
-  for (const p of inPeriod) {
-    const amount = num(p.amount);
-    total += amount;
+  const bucket = (map, key) => {
+    if (!map[key]) map[key] = { revenue: 0, cash: 0 };
+    return map[key];
+  };
 
-    byClient[p.client_id] = (byClient[p.client_id] || 0) + amount;
-    const category = p.category || "Other";
-    byCategory[category] = (byCategory[category] || 0) + amount;
+  for (const p of inPeriod) {
+    const revenue = paymentRevenue(p);
+    const cash = paymentCash(p);
+    total += revenue;
+    totalCash += cash;
+
+    const client = bucket(byClient, p.client_id);
+    client.revenue += revenue;
+    client.cash += cash;
+
+    const category = bucket(byCategory, p.category || "Other");
+    category.revenue += revenue;
+    category.cash += cash;
 
     const acquired = acquiredBy.get(p.client_id) || p.client_date_acquired || null;
-    if (acquired && periodStart && acquired >= periodStart) newClientRev += amount;
-    else existingRev += amount;
+    const isNew = Boolean(acquired && periodStart && acquired >= periodStart);
+    if (isNew) {
+      newClientRev += revenue;
+      newClientCash += cash;
+    } else {
+      existingRev += revenue;
+      existingCash += cash;
+    }
   }
 
-  return { total, newClientRev, existingRev, byClient, byCategory, count: inPeriod.length };
+  return {
+    total,
+    totalCash,
+    outstanding: total - totalCash,
+    newClientRev,
+    existingRev,
+    newClientCash,
+    existingCash,
+    byClient,
+    byCategory,
+    count: inPeriod.length,
+  };
 }
 
 export function computeExpenseMetrics(expenses) {
@@ -134,6 +184,10 @@ export function computeExpenseMetrics(expenses) {
  * Cost/return metrics. Anything that cannot be computed is null — including the
  * cost-per-X family when there is no ad spend at all, since "$0 per client" is
  * misleading rather than informative.
+ *
+ * `totalRevenue` is agreed revenue, not cash collected: ROAS measures the
+ * return the spend actually bought, regardless of how much has been invoiced
+ * out yet.
  */
 export function computeAcquisitionMetrics(callMetrics, totalRevenue, expenseMetrics) {
   const adSpend = expenseMetrics ? num(expenseMetrics.adSpend) : 0;
@@ -150,12 +204,17 @@ export function computeAcquisitionMetrics(callMetrics, totalRevenue, expenseMetr
   };
 }
 
-export function computeProfit(totalRevenue, totalExpenses) {
-  const profit = num(totalRevenue) - num(totalExpenses);
-  return { profit, margin: safePct(profit, totalRevenue) };
+/**
+ * Profit is cash-based: money actually received minus money actually spent.
+ * Margin is expressed against cash collected so both halves of the ratio are
+ * measured the same way.
+ */
+export function computeProfit(cashCollected, totalExpenses) {
+  const profit = num(cashCollected) - num(totalExpenses);
+  return { profit, margin: safePct(profit, cashCollected) };
 }
 
-/** Revenue and expenses bucketed over time for the dashboard chart. */
+/** Revenue, cash collected and expenses bucketed over time for the chart. */
 export function buildTimeSeries(payments, expenses, start, end, granularity = "day") {
   const buckets = new Map();
 
@@ -187,7 +246,9 @@ export function buildTimeSeries(payments, expenses, start, end, granularity = "d
   };
 
   const touch = (key) => {
-    if (!buckets.has(key)) buckets.set(key, { key, label: labelFor(key), revenue: 0, expenses: 0 });
+    if (!buckets.has(key)) {
+      buckets.set(key, { key, label: labelFor(key), revenue: 0, cash: 0, expenses: 0 });
+    }
     return buckets.get(key);
   };
 
@@ -201,12 +262,16 @@ export function buildTimeSeries(payments, expenses, start, end, granularity = "d
     else cursor.setDate(cursor.getDate() + 1);
   }
 
-  for (const p of payments || []) touch(keyFor(p.date)).revenue += num(p.amount);
+  for (const p of payments || []) {
+    const b = touch(keyFor(p.date));
+    b.revenue += paymentRevenue(p);
+    b.cash += paymentCash(p);
+  }
   for (const e of expenses || []) touch(keyFor(e.date)).expenses += num(e.amount);
 
   return Array.from(buckets.values())
     .sort((a, b) => (a.key > b.key ? 1 : -1))
-    .map((b) => ({ ...b, profit: b.revenue - b.expenses }));
+    .map((b) => ({ ...b, profit: b.cash - b.expenses }));
 }
 
 /** Percent change vs a prior period, null when there is nothing to compare to. */

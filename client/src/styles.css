@@ -119,6 +119,13 @@ button { font-family: inherit; }
   margin: 22px 0 12px;
 }
 .section-label:first-of-type { margin-top: 0; }
+.section-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: -8px 0 4px;
+  line-height: 1.5;
+}
+.section-note strong { color: var(--text); font-weight: 600; }
 
 /* ---------- Cards ---------- */
 .card {
@@ -313,6 +320,16 @@ tbody td { padding: 13px 16px; border-bottom: 1px solid var(--border); vertical-
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: #fafafa; }
 .cell-muted { color: var(--muted); font-size: 12.5px; }
+.outstanding { color: var(--amber); font-weight: 600; }
+.field-hint { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.outstanding-note {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 12.5px;
+}
 .cell-strong { font-weight: 600; }
 .cell-notes { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
@@ -395,7 +412,15 @@ tbody tr:hover { background: #fafafa; }
 .legend-list { display: flex; flex-direction: column; gap: 9px; padding-top: 15px; border-top: 1px solid var(--border); }
 .legend-item { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
 .legend-name { flex: 1; }
-.legend-value { font-weight: 600; }
+.legend-value { font-weight: 600; text-align: right; }
+.legend-sub { display: block; font-weight: 500; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+.owed-tag {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--amber);
+  margin-top: 2px;
+}
 
 /* ---------- Collapsible ---------- */
 .collapsible { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }

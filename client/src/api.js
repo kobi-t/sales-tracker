@@ -255,10 +255,18 @@ export const api = {
   },
 };
 
+/**
+ * `client_payments.amount` holds CASH COLLECTED and `client_payments.revenue`
+ * holds the agreed deal value. The column kept its original name so the v3
+ * migration could add `revenue` without a rename — read `amount` as cash
+ * everywhere, and use paymentRevenue()/paymentCash() in metrics.js.
+ */
 function flattenPayment(row) {
   const { clients, ...rest } = row;
   return {
     ...rest,
+    // Payments written before the revenue column existed report cash as revenue.
+    revenue: rest.revenue ?? rest.amount,
     client_name: clients?.name || "Unknown client",
     client_date_acquired: clients?.date_acquired || null,
     client_status: clients?.status || null,
