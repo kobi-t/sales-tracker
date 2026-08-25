@@ -1,121 +1,146 @@
-import { useEffect, useMemo, useState } from "react";
-import { Plus, Pencil, Trash2, ArrowUpDown } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Pencil, Plus, Trash2, UserPlus } from "lucide-react";
 import { api } from "../api";
-import KpiCard from "../components/KpiCard";
+import {
+  Card, ColorBadge, ConfirmDialog, Field, KpiCard, Modal, SortHeader,
+} from "../components/ui";
+import { useData } from "../store";
+import { fmtCurrency, fmtDate } from "../utils/format";
 import { computeCallMetrics } from "../utils/metrics";
 
-const OUTCOME_STYLE = {
-  "Full-Pay": "outcome-positive",
-  "Split-Pay": "outcome-positive",
-  "Deposit": "outcome-positive",
-  "No Deposit & Follow-Up": "outcome-neutral",
-  "Offer & Didn't Buy": "outcome-negative",
-  "Bad Fit & No Offer": "outcome-negative",
-  "Cancelled": "outcome-negative",
-  "No-Show": "outcome-negative",
-  "Rescheduled": "outcome-neutral",
-};
-
-const EMPTY_CALL = {
-  date: new Date().toISOString().slice(0, 10),
-  name: "",
-  source: "Ads",
-  booked: true,
-  outcome: "No Deposit & Follow-Up",
-  revenue: 0,
-  cash_collected: 0,
-  offer_made: false,
-  objection: "",
-  call_summary: "",
-  recording_link: "",
-};
+const today = () => new Date().toISOString().slice(0, 10);
 
 export default function CallLog() {
-  const [calls, setCalls] = useState(null);
-  const [settings, setSettings] = useState(null);
+  const { calls, settings, refresh } = useData();
+
   const [sortKey, setSortKey] = useState("date");
   const [sortDir, setSortDir] = useState("desc");
   const [filterSource, setFilterSource] = useState("all");
   const [filterOutcome, setFilterOutcome] = useState("all");
-  const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
-
-  const load = () => api.getCalls().then(setCalls);
-  useEffect(() => { load(); api.getSettings().then(setSettings); }, []);
+  const [converting, setConverting] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
   const filtered = useMemo(() => {
     if (!calls) return [];
     let rows = calls;
     if (filterSource !== "all") rows = rows.filter((c) => c.source === filterSource);
     if (filterOutcome !== "all") rows = rows.filter((c) => c.outcome === filterOutcome);
-    rows = [...rows].sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey];
+    return [...rows].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
       let cmp;
-      if (typeof av === "number" || typeof bv === "number") cmp = (Number(av) || 0) - (Number(bv) || 0);
-      else cmp = String(av).localeCompare(String(bv));
+      if (sortKey === "deal_value") cmp = (Number(av) || 0) - (Number(bv) || 0);
+      else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
       return sortDir === "asc" ? cmp : -cmp;
     });
-    return rows;
   }, [calls, filterSource, filterOutcome, sortKey, sortDir]);
-
-  function toggleSort(key) {
-    if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
-    else { setSortKey(key); setSortDir("asc"); }
-  }
-
-  function openCreate() { setEditing({ ...EMPTY_CALL }); setModalOpen(true); }
-  function openEdit(call) { setEditing({ ...call }); setModalOpen(true); }
-
-  async function save() {
-    const payload = {
-      ...editing,
-      revenue: Number(editing.revenue) || 0,
-      cash_collected: Number(editing.cash_collected) || 0,
-    };
-    if (editing.id) await api.updateCall(editing.id, payload);
-    else await api.createCall(payload);
-    setModalOpen(false);
-    setEditing(null);
-    load();
-  }
-
-  async function doDelete(id) {
-    await api.deleteCall(id);
-    setConfirmDelete(null);
-    load();
-  }
 
   if (!calls || !settings) return <div className="loading-wrap">Loading call log…</div>;
 
   const outcomes = settings.callOutcomes;
-  const sources = settings.callSources;
-  const callMetrics = computeCallMetrics(filtered);
-  const revPerBookedCall = filtered.length ? callMetrics.totalRevenue / filtered.length : 0;
+  const sources = settings.leadSources;
+  const metrics = computeCallMetrics(filtered, settings);
+  const closedOutcomes = settings.closedOutcomes || [];
+
+  function toggleSort(key) {
+    if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir(key === "date" ? "desc" : "asc"); }
+  }
+
+  function openCreate() {
+    setError(null);
+    setEditing({
+      date: today(),
+      name: "",
+      source: sources[0] || "Ads",
+      outcome: outcomes[0] || "Follow Up",
+      notes: "",
+      deal_value: 0,
+    });
+  }
+
+  async function saveCall() {
+    setBusy(true);
+    setError(null);
+    try {
+      const payload = {
+        date: editing.date,
+        name: editing.name,
+        source: editing.source,
+        outcome: editing.outcome,
+        notes: editing.notes || "",
+        deal_value: Number(editing.deal_value) || 0,
+      };
+      if (editing.id) await api.updateCall(editing.id, payload);
+      else await api.createCall(payload);
+      setEditing(null);
+      await refresh();
+    } catch (e) {
+      setError(e.message || "Could not save the call.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doDelete(id) {
+    setBusy(true);
+    try {
+      await api.deleteCall(id);
+      setConfirmDelete(null);
+      await refresh();
+    } catch (e) {
+      setError(e.message || "Could not delete the call.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doConvert() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.convertCallToClient(converting.callId, {
+        name: converting.name,
+        date_acquired: converting.date_acquired,
+        status: (settings.clientStatuses || ["Active"])[0],
+      });
+      setConverting(null);
+      await refresh();
+    } catch (e) {
+      setError(e.message || "Could not convert this call.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div>
       <div className="page-header">
         <div>
           <div className="page-title">Call Log</div>
-          <div className="page-subtitle">{calls.length} total calls recorded</div>
+          <div className="page-subtitle">{calls.length} calls logged · prospects and sales calls only</div>
         </div>
         <button className="btn btn-primary" onClick={openCreate}><Plus size={15} /> Add Call</button>
       </div>
 
       <div className="kpi-grid">
-        <KpiCard label="Calls Shown" value={callMetrics.totalBookings} />
-        <KpiCard label="Show-Up Rate" value={callMetrics.showUpRate} format="percent" />
-        <KpiCard label="Conversion Rate" value={callMetrics.conversionRate} format="percent" />
-        <KpiCard label="Total Revenue" value={callMetrics.totalRevenue} format="currency" />
-        <KpiCard label="Cash Collected" value={callMetrics.totalCash} format="currency" />
-        <KpiCard label="Revenue / Booked Call" value={revPerBookedCall} format="currency" />
+        <KpiCard label="Calls Shown" value={metrics.total} />
+        <KpiCard label="Attended" value={metrics.attended} />
+        <KpiCard label="Show Rate" value={metrics.showRate} format="percent" />
+        <KpiCard label="Close Rate" value={metrics.closeRate} format="percent" />
+        <KpiCard label="No Shows" value={metrics.noShows} />
+        <KpiCard label="New Clients" value={metrics.closed} />
       </div>
+
+      {error && <div className="alert alert-error">{error}</div>}
 
       <div className="toolbar">
         <div className="filters">
           <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)}>
-            <option value="all">All Sources</option>
+            <option value="all">All Lead Sources</option>
             {sources.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <select value={filterOutcome} onChange={(e) => setFilterOutcome(e.target.value)}>
@@ -123,108 +148,152 @@ export default function CallLog() {
             {outcomes.map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
         </div>
+        <div className="muted">{filtered.length} of {calls.length} shown</div>
       </div>
 
-      <div className="card">
+      <Card bodyClass="">
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                {[
-                  ["date", "Date"], ["name", "Name"], ["source", "Source"], ["outcome", "Outcome"],
-                  ["revenue", "Revenue"], ["cash_collected", "Cash"], ["offer_made", "Offer"],
-                ].map(([key, label]) => (
-                  <th key={key} onClick={() => toggleSort(key)}>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {label} {sortKey === key && <ArrowUpDown size={11} />}
-                    </span>
-                  </th>
-                ))}
-                <th>Objection</th>
-                <th></th>
+                <SortHeader label="Date" column="date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader label="Prospect" column="name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader label="Lead Source" column="source" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader label="Outcome" column="outcome" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortHeader label="Deal Value" column="deal_value" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                <th>Notes</th>
+                <th className="ta-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={9}><div className="empty-state">No calls match these filters.</div></td></tr>
+                <tr><td colSpan={7}><div className="empty-state">No calls match these filters.</div></td></tr>
               )}
-              {filtered.map((c) => (
-                <tr key={c.id}>
-                  <td className="cell-muted">{c.date}</td>
-                  <td className="cell-strong">{c.name}</td>
-                  <td><span className={`badge ${c.source.toLowerCase()}`}>{c.source}</span></td>
-                  <td><span className={`outcome-badge ${OUTCOME_STYLE[c.outcome] || "outcome-neutral"}`}>{c.outcome}</span></td>
-                  <td>${Number(c.revenue || 0).toLocaleString()}</td>
-                  <td>${Number(c.cash_collected || 0).toLocaleString()}</td>
-                  <td className="cell-muted">{c.offer_made ? "Yes" : "No"}</td>
-                  <td className="cell-muted">{c.objection || "—"}</td>
-                  <td>
-                    <div className="row-actions">
-                      <button className="btn btn-sm" onClick={() => openEdit(c)}><Pencil size={13} /></button>
-                      <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(c)}><Trash2 size={13} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((c) => {
+                const isClosed = closedOutcomes.includes(c.outcome);
+                return (
+                  <tr key={c.id}>
+                    <td className="cell-muted nowrap">{fmtDate(c.date)}</td>
+                    <td className="cell-strong">
+                      {c.name || "—"}
+                      {c.converted && <span className="pill-client">Client</span>}
+                    </td>
+                    <td className="cell-muted">{c.source}</td>
+                    <td><ColorBadge label={c.outcome} colors={settings.outcomeColors} /></td>
+                    <td className="ta-right">
+                      {Number(c.deal_value) > 0 ? fmtCurrency(c.deal_value) : <span className="dash">—</span>}
+                    </td>
+                    <td className="cell-muted cell-notes">{c.notes || c.call_summary || ""}</td>
+                    <td>
+                      <div className="row-actions">
+                        {isClosed && !c.converted && (
+                          <button
+                            className="btn btn-sm btn-success"
+                            onClick={() => setConverting({
+                              callId: c.id,
+                              name: c.name || "",
+                              date_acquired: String(c.date).slice(0, 10),
+                            })}
+                          >
+                            <UserPlus size={13} /> Convert
+                          </button>
+                        )}
+                        <button className="btn btn-sm" onClick={() => setEditing({ ...c })} aria-label="Edit">
+                          <Pencil size={13} />
+                        </button>
+                        <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(c)} aria-label="Delete">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
-      </div>
+      </Card>
 
-      {modalOpen && (
-        <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>{editing.id ? "Edit Call" : "Add Call"}</h3>
-            <div className="form-grid">
-              <div className="field"><label>Date</label><input type="date" value={editing.date} onChange={(e) => setEditing({ ...editing, date: e.target.value })} /></div>
-              <div className="field"><label>Prospect Name</label><input type="text" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></div>
-              <div className="field"><label>Source</label>
-                <select value={editing.source} onChange={(e) => setEditing({ ...editing, source: e.target.value })}>
-                  {sources.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div className="field"><label>Outcome</label>
-                <select value={editing.outcome} onChange={(e) => setEditing({ ...editing, outcome: e.target.value })}>
-                  {outcomes.map((o) => <option key={o} value={o}>{o}</option>)}
-                </select>
-              </div>
-              <div className="field"><label>Revenue ($)</label><input type="number" value={editing.revenue} onChange={(e) => setEditing({ ...editing, revenue: e.target.value })} /></div>
-              <div className="field"><label>Cash Collected ($)</label><input type="number" value={editing.cash_collected} onChange={(e) => setEditing({ ...editing, cash_collected: e.target.value })} /></div>
-              <div className="field"><label>Offer Made</label>
-                <select value={editing.offer_made ? "yes" : "no"} onChange={(e) => setEditing({ ...editing, offer_made: e.target.value === "yes" })}>
-                  <option value="no">No</option>
-                  <option value="yes">Yes</option>
-                </select>
-              </div>
-              <div className="field"><label>Booked</label>
-                <select value={editing.booked ? "yes" : "no"} onChange={(e) => setEditing({ ...editing, booked: e.target.value === "yes" })}>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </div>
-              <div className="field full"><label>Objection</label><input type="text" value={editing.objection} onChange={(e) => setEditing({ ...editing, objection: e.target.value })} /></div>
-              <div className="field full"><label>Call Summary</label><textarea rows={3} value={editing.call_summary} onChange={(e) => setEditing({ ...editing, call_summary: e.target.value })} /></div>
-              <div className="field full"><label>Recording Link</label><input type="url" value={editing.recording_link} onChange={(e) => setEditing({ ...editing, recording_link: e.target.value })} /></div>
-            </div>
-            <div className="modal-actions">
-              <button className="btn" onClick={() => setModalOpen(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={save}>Save Call</button>
-            </div>
+      {editing && (
+        <Modal
+          title={editing.id ? "Edit Call" : "Add Call"}
+          onClose={() => setEditing(null)}
+          actions={
+            <>
+              <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveCall} disabled={busy}>
+                {busy ? "Saving…" : "Save Call"}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <Field label="Date">
+              <input type="date" value={editing.date} onChange={(e) => setEditing({ ...editing, date: e.target.value })} />
+            </Field>
+            <Field label="Prospect Name">
+              <input type="text" value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+            </Field>
+            <Field label="Lead Source">
+              <select value={editing.source} onChange={(e) => setEditing({ ...editing, source: e.target.value })}>
+                {sources.map((s) => <option key={s} value={s}>{s}</option>)}
+                {!sources.includes(editing.source) && <option value={editing.source}>{editing.source}</option>}
+              </select>
+            </Field>
+            <Field label="Outcome">
+              <select value={editing.outcome} onChange={(e) => setEditing({ ...editing, outcome: e.target.value })}>
+                {outcomes.map((o) => <option key={o} value={o}>{o}</option>)}
+                {!outcomes.includes(editing.outcome) && <option value={editing.outcome}>{editing.outcome}</option>}
+              </select>
+            </Field>
+            <Field label="Deal Value ($) — optional">
+              <input type="number" min="0" step="0.01" value={editing.deal_value ?? 0}
+                onChange={(e) => setEditing({ ...editing, deal_value: e.target.value })} />
+            </Field>
+            <Field label="Notes" full>
+              <textarea rows={3} value={editing.notes || ""} onChange={(e) => setEditing({ ...editing, notes: e.target.value })} />
+            </Field>
           </div>
-        </div>
+        </Modal>
+      )}
+
+      {converting && (
+        <Modal
+          title="Convert to Client"
+          width={440}
+          onClose={() => setConverting(null)}
+          actions={
+            <>
+              <button className="btn" onClick={() => setConverting(null)}>Cancel</button>
+              <button className="btn btn-success-solid" onClick={doConvert} disabled={busy || !converting.name.trim()}>
+                {busy ? "Converting…" : "Create Client"}
+              </button>
+            </>
+          }
+        >
+          <p className="modal-body-text">
+            This creates a client record and links it back to the call. Add their payments on the Clients page.
+          </p>
+          <div className="form-grid">
+            <Field label="Client Name" full>
+              <input type="text" value={converting.name}
+                onChange={(e) => setConverting({ ...converting, name: e.target.value })} />
+            </Field>
+            <Field label="Date Acquired" full>
+              <input type="date" value={converting.date_acquired}
+                onChange={(e) => setConverting({ ...converting, date_acquired: e.target.value })} />
+            </Field>
+          </div>
+        </Modal>
       )}
 
       {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
-          <div className="modal" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
-            <h3>Delete this call?</h3>
-            <p style={{ color: "var(--text-muted)", fontSize: 13 }}>This will permanently remove the call for {confirmDelete.name} on {confirmDelete.date}.</p>
-            <div className="modal-actions">
-              <button className="btn" onClick={() => setConfirmDelete(null)}>Cancel</button>
-              <button className="btn btn-primary" style={{ background: "var(--red)", borderColor: "var(--red)" }} onClick={() => doDelete(confirmDelete.id)}>Delete</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="Delete this call?"
+          message={`This permanently removes the call for ${confirmDelete.name || "this prospect"} on ${fmtDate(confirmDelete.date)}.`}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => doDelete(confirmDelete.id)}
+        />
       )}
     </div>
   );

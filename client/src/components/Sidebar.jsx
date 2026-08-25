@@ -1,32 +1,37 @@
-import { NavLink } from "react-router-dom";
-import { LayoutDashboard, PhoneCall, Receipt, FileSpreadsheet, Settings as SettingsIcon } from "lucide-react";
+import {
+  DollarSign, FileSpreadsheet, LayoutDashboard, PhoneCall,
+  Receipt, Settings as SettingsIcon, Users,
+} from "lucide-react";
 
-const links = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/calls", label: "Call Log", icon: PhoneCall },
-  { to: "/expenses", label: "Expenses", icon: Receipt },
-  { to: "/reports", label: "Monthly Reports", icon: FileSpreadsheet },
-  { to: "/settings", label: "Settings", icon: SettingsIcon },
+export const PAGES = [
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "calls", label: "Call Log", icon: PhoneCall },
+  { key: "clients", label: "Clients", icon: Users },
+  { key: "revenue", label: "Revenue", icon: DollarSign },
+  { key: "expenses", label: "Expenses", icon: Receipt },
+  { key: "reports", label: "Monthly Reports", icon: FileSpreadsheet },
+  { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ page, setPage }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
         <span className="dot">S</span>
         <span>SalesTrack</span>
       </div>
-      {links.map(({ to, label, icon: Icon }) => (
-        <NavLink
-          key={to}
-          to={to}
-          end={to === "/"}
-          className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
-        >
-          <Icon size={16} />
-          <span>{label}</span>
-        </NavLink>
-      ))}
+      <nav className="sidebar-nav">
+        {PAGES.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            className={`nav-link${page === key ? " active" : ""}`}
+            onClick={() => setPage(key)}
+          >
+            <Icon size={16} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
     </aside>
   );
 }
