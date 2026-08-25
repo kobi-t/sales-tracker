@@ -200,6 +200,33 @@ export const api = {
     return { ok: true };
   },
 
+  // ---- Cash payouts ------------------------------------------------------
+  // A standalone log of money Stripe actually deposited. Deliberately not
+  // linked to clients or payments — it only answers "what landed in the bank".
+  async getPayouts() {
+    const { data, error } = await supabase
+      .from("cash_payouts")
+      .select("*")
+      .order("date", { ascending: false });
+    check(error);
+    return data || [];
+  },
+  async createPayout(payload) {
+    const { data, error } = await supabase.from("cash_payouts").insert(payload).select().single();
+    check(error);
+    return data;
+  },
+  async updatePayout(id, payload) {
+    const { data, error } = await supabase.from("cash_payouts").update(payload).eq("id", id).select().single();
+    check(error);
+    return data;
+  },
+  async deletePayout(id) {
+    const { error } = await supabase.from("cash_payouts").delete().eq("id", id);
+    check(error);
+    return { ok: true };
+  },
+
   // ---- Expenses ----------------------------------------------------------
   async getExpenses() {
     const { data, error } = await supabase
@@ -256,17 +283,14 @@ export const api = {
 };
 
 /**
- * `client_payments.amount` holds CASH COLLECTED and `client_payments.revenue`
- * holds the agreed deal value. The column kept its original name so the v3
- * migration could add `revenue` without a rename — read `amount` as cash
- * everywhere, and use paymentRevenue()/paymentCash() in metrics.js.
+ * `client_payments.amount` is what the client was charged / invoiced. Cash
+ * actually received is tracked separately in `cash_payouts` and is never
+ * attributed back to an individual client payment.
  */
 function flattenPayment(row) {
   const { clients, ...rest } = row;
   return {
     ...rest,
-    // Payments written before the revenue column existed report cash as revenue.
-    revenue: rest.revenue ?? rest.amount,
     client_name: clients?.name || "Unknown client",
     client_date_acquired: clients?.date_acquired || null,
     client_status: clients?.status || null,

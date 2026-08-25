@@ -13,6 +13,7 @@ export function DataProvider({ children }) {
     calls: null,
     clients: null,
     payments: null,
+    payouts: null,
     expenses: null,
     settings: null,
   });
@@ -20,14 +21,15 @@ export function DataProvider({ children }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [calls, clients, payments, expenses, settings] = await Promise.all([
+      const [calls, clients, payments, payouts, expenses, settings] = await Promise.all([
         api.getCalls(),
         api.getClients(),
         api.getPayments(),
+        api.getPayouts(),
         api.getExpenses(),
         api.getSettings(),
       ]);
-      setState({ calls, clients, payments, expenses, settings });
+      setState({ calls, clients, payments, payouts, expenses, settings });
       setError(null);
     } catch (e) {
       console.error("Failed to load data", e);
@@ -50,6 +52,6 @@ export function useData() {
 
 /** True once every dataset has arrived. */
 export function useDataReady() {
-  const { calls, clients, payments, expenses, settings } = useData();
-  return Boolean(calls && clients && payments && expenses && settings);
+  const { calls, clients, payments, payouts, expenses, settings } = useData();
+  return Boolean(calls && clients && payments && payouts && expenses && settings);
 }

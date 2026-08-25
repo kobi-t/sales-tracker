@@ -81,27 +81,9 @@ export function computeCallMetrics(calls, settings) {
 }
 
 /**
- * Two numbers are tracked per payment and must never be conflated:
- *
- *   revenue = the full deal value agreed
- *   cash    = the money actually received so far (DB column `amount`)
- *
- * They differ whenever a client pays in splits or instalments, and the gap
- * between them is the outstanding balance.
- */
-export function paymentRevenue(p) {
-  // Falls back to cash for rows written before the revenue column existed.
-  return num(p.revenue ?? p.amount);
-}
-
-export function paymentCash(p) {
-  return num(p.amount);
-}
-
-/**
- * Revenue for a period, split by whether the paying client was acquired inside
- * that period (new) or before it (existing). Every figure is reported twice:
- * once as agreed revenue, once as cash collected.
+ * Revenue is what clients were charged, taken from client_payments.amount.
+ * Cash actually banked is tracked separately — see computeCashCollected — and
+ * the two are never reconciled per payment.
  */
 export function computeRevenueMetrics(payments, clients, periodStart, periodEnd) {
   const inPeriod = periodStart && periodEnd
@@ -112,55 +94,33 @@ export function computeRevenueMetrics(payments, clients, periodStart, periodEnd)
   for (const c of clients || []) acquiredBy.set(c.id, String(c.date_acquired || "").slice(0, 10));
 
   let total = 0;
-  let totalCash = 0;
   let newClientRev = 0;
   let existingRev = 0;
-  let newClientCash = 0;
-  let existingCash = 0;
   const byClient = {};
   const byCategory = {};
 
-  const bucket = (map, key) => {
-    if (!map[key]) map[key] = { revenue: 0, cash: 0 };
-    return map[key];
-  };
-
   for (const p of inPeriod) {
-    const revenue = paymentRevenue(p);
-    const cash = paymentCash(p);
-    total += revenue;
-    totalCash += cash;
+    const amount = num(p.amount);
+    total += amount;
 
-    const client = bucket(byClient, p.client_id);
-    client.revenue += revenue;
-    client.cash += cash;
-
-    const category = bucket(byCategory, p.category || "Other");
-    category.revenue += revenue;
-    category.cash += cash;
+    byClient[p.client_id] = (byClient[p.client_id] || 0) + amount;
+    const category = p.category || "Other";
+    byCategory[category] = (byCategory[category] || 0) + amount;
 
     const acquired = acquiredBy.get(p.client_id) || p.client_date_acquired || null;
-    const isNew = Boolean(acquired && periodStart && acquired >= periodStart);
-    if (isNew) {
-      newClientRev += revenue;
-      newClientCash += cash;
-    } else {
-      existingRev += revenue;
-      existingCash += cash;
-    }
+    if (acquired && periodStart && acquired >= periodStart) newClientRev += amount;
+    else existingRev += amount;
   }
 
+  return { total, newClientRev, existingRev, byClient, byCategory, count: inPeriod.length };
+}
+
+/** Cash actually deposited, from the standalone Stripe payout log. */
+export function computeCashCollected(payouts) {
+  const rows = payouts || [];
   return {
-    total,
-    totalCash,
-    outstanding: total - totalCash,
-    newClientRev,
-    existingRev,
-    newClientCash,
-    existingCash,
-    byClient,
-    byCategory,
-    count: inPeriod.length,
+    total: rows.reduce((s, p) => s + num(p.amount), 0),
+    count: rows.length,
   };
 }
 
@@ -214,8 +174,8 @@ export function computeProfit(cashCollected, totalExpenses) {
   return { profit, margin: safePct(profit, cashCollected) };
 }
 
-/** Revenue, cash collected and expenses bucketed over time for the chart. */
-export function buildTimeSeries(payments, expenses, start, end, granularity = "day") {
+/** Revenue, cash payouts and expenses bucketed over time for the chart. */
+export function buildTimeSeries(payments, payouts, expenses, start, end, granularity = "day") {
   const buckets = new Map();
 
   const parse = (iso) => {
@@ -262,11 +222,8 @@ export function buildTimeSeries(payments, expenses, start, end, granularity = "d
     else cursor.setDate(cursor.getDate() + 1);
   }
 
-  for (const p of payments || []) {
-    const b = touch(keyFor(p.date));
-    b.revenue += paymentRevenue(p);
-    b.cash += paymentCash(p);
-  }
+  for (const p of payments || []) touch(keyFor(p.date)).revenue += num(p.amount);
+  for (const p of payouts || []) touch(keyFor(p.date)).cash += num(p.amount);
   for (const e of expenses || []) touch(keyFor(e.date)).expenses += num(e.amount);
 
   return Array.from(buckets.values())

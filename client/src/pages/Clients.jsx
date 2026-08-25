@@ -4,7 +4,6 @@ import { api } from "../api";
 import { Card, ColorBadge, ConfirmDialog, Field, Modal } from "../components/ui";
 import { useData } from "../store";
 import { fmtCurrency, fmtDate, initials, tintedBadgeStyle } from "../utils/format";
-import { paymentCash, paymentRevenue } from "../utils/metrics";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -33,8 +32,7 @@ export default function Clients() {
 
   const statuses = settings.clientStatuses || ["Active"];
   const categories = settings.revenueCategories || ["Retainer"];
-  const totalRevenue = (payments || []).reduce((s, p) => s + paymentRevenue(p), 0);
-  const totalCash = (payments || []).reduce((s, p) => s + paymentCash(p), 0);
+  const totalRevenue = (payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
   function toggle(id) {
     setExpanded((prev) => {
@@ -78,8 +76,7 @@ export default function Clients() {
       const payload = {
         client_id: editingPayment.client_id,
         date: editingPayment.date,
-        revenue: Number(editingPayment.revenue) || 0,
-        amount: Number(editingPayment.amount) || 0, // cash collected
+        amount: Number(editingPayment.amount) || 0, // what the client was charged
         category: editingPayment.category,
         notes: editingPayment.notes || "",
       };
@@ -127,10 +124,7 @@ export default function Clients() {
           <div className="page-title">Clients</div>
           <div className="page-subtitle">
             {clients.length} {clients.length === 1 ? "client" : "clients"} ·{" "}
-            {fmtCurrency(totalRevenue)} total revenue · {fmtCurrency(totalCash)} cash collected
-            {totalRevenue - totalCash > 0.005 && (
-              <> · <span className="outstanding">{fmtCurrency(totalRevenue - totalCash)} outstanding</span></>
-            )}
+            {fmtCurrency(totalRevenue)} total revenue all time
           </div>
         </div>
         <button className="btn btn-primary" onClick={openAddClient}><Plus size={15} /> Add Client</button>
@@ -148,9 +142,7 @@ export default function Clients() {
         <div className="client-list">
           {clients.map((client) => {
             const clientPayments = paymentsByClient.get(client.id) || [];
-            const revenue = clientPayments.reduce((s, p) => s + paymentRevenue(p), 0);
-            const cash = clientPayments.reduce((s, p) => s + paymentCash(p), 0);
-            const owing = revenue - cash;
+            const revenue = clientPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
             const isOpen = expanded.has(client.id);
             const statusHex = (settings.statusColors || {})[client.status] || "#6b7280";
 
@@ -170,17 +162,7 @@ export default function Clients() {
                   </span>
                   <span className="client-figure">
                     <span className="figure-value">{fmtCurrency(revenue)}</span>
-                    <span className="figure-label">revenue</span>
-                  </span>
-                  <span className="client-figure">
-                    <span className="figure-value">{fmtCurrency(cash)}</span>
-                    <span className="figure-label">cash collected</span>
-                  </span>
-                  <span className="client-figure">
-                    <span className={`figure-value${owing > 0.005 ? " outstanding" : ""}`}>
-                      {fmtCurrency(owing)}
-                    </span>
-                    <span className="figure-label">outstanding</span>
+                    <span className="figure-label">total revenue</span>
                   </span>
                   <ColorBadge label={client.status} colors={settings.statusColors} />
                   <span className="client-chevron">
@@ -199,13 +181,9 @@ export default function Clients() {
                         onClick={() => setEditingPayment({
                           client_id: client.id,
                           date: today(),
-                          revenue: "",
                           amount: "",
                           category: categories[0],
                           notes: "",
-                          // Cash mirrors revenue until the user edits it directly,
-                          // since a paid-in-full deal is the common case.
-                          cashTouched: false,
                         })}
                       >
                         <Plus size={13} /> Add Payment
@@ -226,46 +204,33 @@ export default function Clients() {
                             <tr>
                               <th>Date</th>
                               <th>Category</th>
-                              <th className="ta-right">Revenue</th>
-                              <th className="ta-right">Cash Collected</th>
-                              <th className="ta-right">Outstanding</th>
+                              <th className="ta-right">Amount</th>
                               <th>Notes</th>
                               <th className="ta-right">Actions</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {clientPayments.map((p) => {
-                              const owed = paymentRevenue(p) - paymentCash(p);
-                              return (
-                                <tr key={p.id}>
-                                  <td className="cell-muted nowrap">{fmtDate(p.date)}</td>
-                                  <td><span className="chip">{p.category}</span></td>
-                                  <td className="ta-right cell-strong">{fmtCurrency(paymentRevenue(p), { decimals: 2 })}</td>
-                                  <td className="ta-right">{fmtCurrency(paymentCash(p), { decimals: 2 })}</td>
-                                  <td className={`ta-right${owed > 0.005 ? " outstanding" : " cell-muted"}`}>
-                                    {fmtCurrency(owed, { decimals: 2 })}
-                                  </td>
-                                  <td className="cell-muted cell-notes">{p.notes}</td>
-                                  <td>
-                                    <div className="row-actions">
-                                      <button className="btn btn-sm" onClick={() => setEditingPayment({ ...p, cashTouched: true })} aria-label="Edit payment">
-                                        <Pencil size={12} />
-                                      </button>
-                                      <button className="btn btn-sm btn-danger" onClick={() => setConfirmDeletePayment(p)} aria-label="Delete payment">
-                                        <Trash2 size={12} />
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                            {clientPayments.map((p) => (
+                              <tr key={p.id}>
+                                <td className="cell-muted nowrap">{fmtDate(p.date)}</td>
+                                <td><span className="chip">{p.category}</span></td>
+                                <td className="ta-right cell-strong">{fmtCurrency(p.amount, { decimals: 2 })}</td>
+                                <td className="cell-muted cell-notes">{p.notes}</td>
+                                <td>
+                                  <div className="row-actions">
+                                    <button className="btn btn-sm" onClick={() => setEditingPayment({ ...p })} aria-label="Edit payment">
+                                      <Pencil size={12} />
+                                    </button>
+                                    <button className="btn btn-sm btn-danger" onClick={() => setConfirmDeletePayment(p)} aria-label="Delete payment">
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
                             <tr className="total-row">
                               <td colSpan={2}>Total</td>
                               <td className="ta-right">{fmtCurrency(revenue, { decimals: 2 })}</td>
-                              <td className="ta-right">{fmtCurrency(cash, { decimals: 2 })}</td>
-                              <td className={`ta-right${owing > 0.005 ? " outstanding" : ""}`}>
-                                {fmtCurrency(owing, { decimals: 2 })}
-                              </td>
                               <td colSpan={2} />
                             </tr>
                           </tbody>
@@ -333,46 +298,17 @@ export default function Clients() {
           }
         >
           <div className="form-grid">
-            <Field label="Date" full>
+            <Field label="Date">
               <input type="date" value={String(editingPayment.date).slice(0, 10)}
                 onChange={(e) => setEditingPayment({ ...editingPayment, date: e.target.value })} />
             </Field>
-            <Field label="Revenue ($)">
-              <input
-                type="number" min="0" step="0.01" value={editingPayment.revenue ?? ""}
-                onChange={(e) => setEditingPayment({
-                  ...editingPayment,
-                  revenue: e.target.value,
-                  // Keep cash in step until it has been set by hand.
-                  amount: editingPayment.cashTouched ? editingPayment.amount : e.target.value,
-                })}
-              />
-              <span className="field-hint">Full deal value agreed</span>
-            </Field>
-            <Field label="Cash Collected ($)">
+            <Field label="Amount ($)">
               <input
                 type="number" min="0" step="0.01" value={editingPayment.amount ?? ""}
-                onChange={(e) => setEditingPayment({
-                  ...editingPayment,
-                  amount: e.target.value,
-                  cashTouched: true,
-                })}
+                onChange={(e) => setEditingPayment({ ...editingPayment, amount: e.target.value })}
               />
-              <span className="field-hint">Money received so far</span>
+              <span className="field-hint">What the client was charged</span>
             </Field>
-            {Number(editingPayment.revenue || 0) - Number(editingPayment.amount || 0) > 0.005 && (
-              <div className="field full">
-                <div className="outstanding-note">
-                  Outstanding balance:{" "}
-                  <strong>
-                    {fmtCurrency(
-                      Number(editingPayment.revenue || 0) - Number(editingPayment.amount || 0),
-                      { decimals: 2 }
-                    )}
-                  </strong>
-                </div>
-              </div>
-            )}
             <Field label="Category" full>
               <select value={editingPayment.category}
                 onChange={(e) => setEditingPayment({ ...editingPayment, category: e.target.value })}>
@@ -403,7 +339,7 @@ export default function Clients() {
       {confirmDeletePayment && (
         <ConfirmDialog
           title="Delete this payment?"
-          message={`This removes the payment dated ${fmtDate(confirmDeletePayment.date)} — ${fmtCurrency(paymentRevenue(confirmDeletePayment))} revenue, ${fmtCurrency(paymentCash(confirmDeletePayment))} cash collected.`}
+          message={`This removes the ${fmtCurrency(confirmDeletePayment.amount)} payment dated ${fmtDate(confirmDeletePayment.date)}.`}
           onCancel={() => setConfirmDeletePayment(null)}
           onConfirm={() => deletePayment(confirmDeletePayment.id)}
         />

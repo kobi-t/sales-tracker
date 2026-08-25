@@ -5,37 +5,39 @@ import { useData } from "../store";
 import { monthBounds } from "../utils/dateRange";
 import { DASH, fmtCurrency, fmtMultiple, fmtPercent } from "../utils/format";
 import {
-  computeAcquisitionMetrics, computeCallMetrics, computeExpenseMetrics, computeProfit,
-  computeRevenueMetrics, downloadCSV, filterByRange, paymentCash, paymentRevenue, toCSV,
+  computeAcquisitionMetrics, computeCallMetrics, computeCashCollected, computeExpenseMetrics,
+  computeProfit, computeRevenueMetrics, downloadCSV, filterByRange, toCSV,
 } from "../utils/metrics";
 
 export default function Reports() {
-  const { calls, clients, payments, expenses, settings } = useData();
+  const { calls, clients, payments, payouts, expenses, settings } = useData();
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
 
   const model = useMemo(() => {
-    if (!calls || !clients || !payments || !expenses || !settings) return null;
+    if (!calls || !clients || !payments || !payouts || !expenses || !settings) return null;
     const { start, end, label } = monthBounds(month);
 
     const callsIn = filterByRange(calls, start, end);
     const expensesIn = filterByRange(expenses, start, end);
     const paymentsIn = filterByRange(payments, start, end);
+    const payoutsIn = filterByRange(payouts, start, end);
     const clientsIn = clients.filter(
       (c) => String(c.date_acquired).slice(0, 10) >= start && String(c.date_acquired).slice(0, 10) <= end
     );
 
     const call = computeCallMetrics(callsIn, settings);
     const revenue = computeRevenueMetrics(payments, clients, start, end);
+    const cash = computeCashCollected(payoutsIn);
     const expense = computeExpenseMetrics(expensesIn);
     const acquisition = computeAcquisitionMetrics(call, revenue.total, expense);
-    const { profit, margin } = computeProfit(revenue.totalCash, expense.total);
+    const { profit, margin } = computeProfit(cash.total, expense.total);
 
-    return { start, end, label, callsIn, expensesIn, paymentsIn, clientsIn, call, revenue, expense, acquisition, profit, margin };
-  }, [calls, clients, payments, expenses, settings, month]);
+    return { start, end, label, callsIn, expensesIn, paymentsIn, payoutsIn, clientsIn, call, revenue, cash, expense, acquisition, profit, margin };
+  }, [calls, clients, payments, payouts, expenses, settings, month]);
 
   if (!model) return <div className="loading-wrap">Loading reports…</div>;
 
-  const { label, callsIn, expensesIn, paymentsIn, clientsIn, call, revenue, expense, acquisition, profit, margin } = model;
+  const { label, callsIn, expensesIn, paymentsIn, payoutsIn, clientsIn, call, revenue, cash, expense, acquisition, profit, margin } = model;
 
   const exports = [
     {
@@ -58,9 +60,16 @@ export default function Reports() {
         { label: "Date", value: (r) => r.date },
         { label: "Client", value: (r) => r.client_name },
         { label: "Category", value: (r) => r.category },
-        { label: "Revenue", value: (r) => paymentRevenue(r).toFixed(2) },
-        { label: "Cash Collected", value: (r) => paymentCash(r).toFixed(2) },
-        { label: "Outstanding", value: (r) => (paymentRevenue(r) - paymentCash(r)).toFixed(2) },
+        { label: "Amount", value: (r) => Number(r.amount || 0).toFixed(2) },
+        { label: "Notes", value: (r) => r.notes || "" },
+      ])),
+    },
+    {
+      title: "Cash Collected",
+      desc: `${payoutsIn.length} Stripe ${payoutsIn.length === 1 ? "payout" : "payouts"} in ${label}.`,
+      run: () => downloadCSV(`cash-collected-${month}.csv`, toCSV(payoutsIn, [
+        { label: "Date", value: (r) => r.date },
+        { label: "Amount", value: (r) => Number(r.amount || 0).toFixed(2) },
         { label: "Notes", value: (r) => r.notes || "" },
       ])),
     },
@@ -96,15 +105,13 @@ export default function Reports() {
           return v;
         };
         const rows = [
-          ["Revenue", "Total Revenue (agreed deal value)", csvValue(revenue.total, "money")],
-          ["Revenue", "Total Cash Collected (money received)", csvValue(revenue.totalCash, "money")],
-          ["Revenue", "Outstanding (revenue not yet collected)", csvValue(revenue.outstanding, "money")],
+          ["Revenue", "Total Revenue (charged to clients)", csvValue(revenue.total, "money")],
           ["Revenue", "New Client Revenue", csvValue(revenue.newClientRev, "money")],
-          ["Revenue", "New Client Cash Collected", csvValue(revenue.newClientCash, "money")],
           ["Revenue", "Existing Client Revenue", csvValue(revenue.existingRev, "money")],
-          ["Revenue", "Existing Client Cash Collected", csvValue(revenue.existingCash, "money")],
           ["Revenue", "Number of Payments", paymentsIn.length],
           ["Revenue", "New Clients Acquired", clientsIn.length],
+          ["Cash", "Cash Collected (Stripe payouts)", csvValue(cash.total, "money")],
+          ["Cash", "Number of Payouts", payoutsIn.length],
           ["Expenses", "Total Expenses", csvValue(expense.total, "money")],
           ["Expenses", "Ad Spend", csvValue(expense.adSpend, "money")],
           ["Expenses", "Other Expenses", csvValue(expense.total - expense.adSpend, "money")],
@@ -125,7 +132,7 @@ export default function Reports() {
           ["Acquisition", "Cost per Booked Call", csvValue(acquisition.costPerBookedCall, "money")],
           ["Acquisition", "Cost per Attended Call", csvValue(acquisition.costPerAttendedCall, "money")],
           ["Acquisition", "Cost per New Client", csvValue(acquisition.costPerClient, "money")],
-          ["Acquisition", "ROAS (revenue / ad spend)", csvValue(acquisition.roas, "multiple")],
+          ["Acquisition", "ROAS (revenue charged / ad spend)", csvValue(acquisition.roas, "multiple")],
           ["Acquisition", "Revenue per Booked Call", csvValue(acquisition.revPerBookedCall, "money")],
           ["Acquisition", "Revenue per Attended Call", csvValue(acquisition.revPerAttendedCall, "money")],
         ].map(([section, metric, value]) => ({ section, metric, value }));
@@ -153,8 +160,7 @@ export default function Reports() {
         <Card title="Revenue & Profit" subtitle={label}>
           <div className="stat-row">
             <Stat label="Total Revenue" value={revenue.total} format="currency" />
-            <Stat label="Cash Collected" value={revenue.totalCash} format="currency" />
-            <Stat label="Outstanding" value={revenue.outstanding} format="currency" />
+            <Stat label="Cash Collected" value={cash.total} format="currency" />
             <Stat label="New Client Revenue" value={revenue.newClientRev} format="currency" />
             <Stat label="Existing Client Revenue" value={revenue.existingRev} format="currency" />
             <Stat label="Total Expenses" value={expense.total} format="currency" />
@@ -162,7 +168,8 @@ export default function Reports() {
             <Stat label="Profit Margin" value={margin} format="percent" />
           </div>
           <p className="mapping-note">
-            Profit = cash collected − expenses. Margin is measured against cash collected.
+            Revenue is what clients were charged; cash collected is Stripe payouts banked.
+            Profit = cash collected − expenses.
           </p>
         </Card>
 

@@ -8,15 +8,15 @@ import { useData } from "../store";
 import { granularityFor } from "../utils/dateRange";
 import { fmtCurrency } from "../utils/format";
 import {
-  buildTimeSeries, computeAcquisitionMetrics, computeCallMetrics, computeExpenseMetrics,
-  computeProfit, computeRevenueMetrics, filterByRange,
+  buildTimeSeries, computeAcquisitionMetrics, computeCallMetrics, computeCashCollected,
+  computeExpenseMetrics, computeProfit, computeRevenueMetrics, filterByRange,
 } from "../utils/metrics";
 
 export default function Dashboard() {
-  const { calls, clients, payments, expenses, settings } = useData();
+  const { calls, clients, payments, payouts, expenses, settings } = useData();
   const { start, end, prevStart, prevEnd, label, selectorProps } = useDateRange();
 
-  const ready = calls && clients && payments && expenses && settings;
+  const ready = calls && clients && payments && payouts && expenses && settings;
 
   const model = useMemo(() => {
     if (!ready) return null;
@@ -24,13 +24,15 @@ export default function Dashboard() {
     const build = (from, to) => {
       const callsIn = filterByRange(calls, from, to);
       const expensesIn = filterByRange(expenses, from, to);
+      const payoutsIn = filterByRange(payouts, from, to);
       const call = computeCallMetrics(callsIn, settings);
       const revenue = computeRevenueMetrics(payments, clients, from, to);
+      const cash = computeCashCollected(payoutsIn);
       const expense = computeExpenseMetrics(expensesIn);
-      // ROAS is measured on agreed revenue; profit on cash actually banked.
+      // ROAS is measured on revenue charged; profit on cash actually banked.
       const acquisition = computeAcquisitionMetrics(call, revenue.total, expense);
-      const { profit, margin } = computeProfit(revenue.totalCash, expense.total);
-      return { callsIn, expensesIn, call, revenue, expense, acquisition, profit, margin };
+      const { profit, margin } = computeProfit(cash.total, expense.total);
+      return { callsIn, expensesIn, payoutsIn, call, revenue, cash, expense, acquisition, profit, margin };
     };
 
     const current = build(start, end);
@@ -41,16 +43,16 @@ export default function Dashboard() {
 
     const paymentsIn = filterByRange(payments, start, end);
     const series = buildTimeSeries(
-      paymentsIn, current.expensesIn, start, end, granularityFor(start, end)
+      paymentsIn, current.payoutsIn, current.expensesIn, start, end, granularityFor(start, end)
     );
 
     return { current, previous, activeClients, revenuePerClient, series };
-  }, [ready, calls, clients, payments, expenses, settings, start, end, prevStart, prevEnd]);
+  }, [ready, calls, clients, payments, payouts, expenses, settings, start, end, prevStart, prevEnd]);
 
   if (!ready || !model) return <div className="loading-wrap">Loading dashboard…</div>;
 
   const { current, previous, activeClients, revenuePerClient, series } = model;
-  const { call, revenue, expense, acquisition, profit, margin } = current;
+  const { call, revenue, cash, expense, acquisition, profit, margin } = current;
 
   const revenueSplitTotal = revenue.newClientRev + revenue.existingRev;
 
@@ -67,9 +69,8 @@ export default function Dashboard() {
       {/* ---- Section A: Revenue & Profit ---- */}
       <div className="section-label">Revenue &amp; Profit</div>
       <div className="kpi-grid">
-        <KpiCard label="Total Revenue" value={revenue.total} prevValue={previous.revenue.total} format="currency" />
-        <KpiCard label="Cash Collected" value={revenue.totalCash} prevValue={previous.revenue.totalCash} format="currency" />
-        <KpiCard label="Outstanding" value={revenue.outstanding} prevValue={previous.revenue.outstanding} format="currency" invertTrend />
+        <KpiCard label="Total Revenue" value={revenue.total} prevValue={previous.revenue.total} format="currency" hint="Charged to clients" />
+        <KpiCard label="Cash Collected" value={cash.total} prevValue={previous.cash.total} format="currency" hint="Stripe payouts banked" />
         <KpiCard label="Total Expenses" value={expense.total} prevValue={previous.expense.total} format="currency" invertTrend />
         <KpiCard label="Profit" value={profit} prevValue={previous.profit} format="currency" />
         <KpiCard label="Profit Margin" value={margin} prevValue={previous.margin} format="percent" />
@@ -83,8 +84,9 @@ export default function Dashboard() {
         />
       </div>
       <div className="section-note">
-        Profit is <strong>cash collected minus expenses</strong> — money actually banked. ROAS below
-        uses <strong>agreed revenue</strong>.
+        <strong>Revenue</strong> is what clients were charged. <strong>Cash Collected</strong> is
+        Stripe payouts banked, logged separately on the Revenue page. Profit is cash collected minus
+        expenses; ROAS below uses revenue.
       </div>
 
       {/* ---- Section B: Sales Performance ---- */}
