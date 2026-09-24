@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Download } from "lucide-react";
+import DateRangeSelector, { useDateRange } from "../components/DateRangeSelector";
 import { Card, Stat } from "../components/ui";
 import { useData } from "../store";
 import { monthBounds } from "../utils/dateRange";
@@ -11,11 +12,30 @@ import {
 
 export default function Reports() {
   const { calls, clients, payments, payouts, expenses, settings } = useData();
+
+  // Two ways to pick the reporting period. "month" keeps the original
+  // single-month picker; "range" spans any number of months.
+  const [mode, setMode] = useState("month");
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+
+  const allDates = useMemo(
+    () => [...(calls || []), ...(payments || []), ...(payouts || []), ...(expenses || [])].map((r) => r.date),
+    [calls, payments, payouts, expenses]
+  );
+  const range = useDateRange("last3", allDates);
+
+  // Both modes resolve to the same { start, end, label }, so everything
+  // downstream — metrics, snapshot and every CSV — is unchanged.
+  const period = mode === "month"
+    ? monthBounds(month)
+    : { start: range.start, end: range.end, label: range.label };
+  const { start, end, label } = period;
+
+  // Filename suffix: "2026-09" for a month, "2026-07-01_to_2026-09-24" for a range.
+  const slug = mode === "month" ? month : `${start}_to_${end}`;
 
   const model = useMemo(() => {
     if (!calls || !clients || !payments || !payouts || !expenses || !settings) return null;
-    const { start, end, label } = monthBounds(month);
 
     const callsIn = filterByRange(calls, start, end);
     const expensesIn = filterByRange(expenses, start, end);
@@ -32,18 +52,18 @@ export default function Reports() {
     const acquisition = computeAcquisitionMetrics(call, revenue.total, expense);
     const { profit, margin } = computeProfit(cash.total, expense.total);
 
-    return { start, end, label, callsIn, expensesIn, paymentsIn, payoutsIn, clientsIn, call, revenue, cash, expense, acquisition, profit, margin };
-  }, [calls, clients, payments, payouts, expenses, settings, month]);
+    return { callsIn, expensesIn, paymentsIn, payoutsIn, clientsIn, call, revenue, cash, expense, acquisition, profit, margin };
+  }, [calls, clients, payments, payouts, expenses, settings, start, end]);
 
   if (!model) return <div className="loading-wrap">Loading reports…</div>;
 
-  const { label, callsIn, expensesIn, paymentsIn, payoutsIn, clientsIn, call, revenue, cash, expense, acquisition, profit, margin } = model;
+  const { callsIn, expensesIn, paymentsIn, payoutsIn, clientsIn, call, revenue, cash, expense, acquisition, profit, margin } = model;
 
   const exports = [
     {
       title: "Call Log",
       desc: `${callsIn.length} calls logged in ${label}.`,
-      run: () => downloadCSV(`call-log-${month}.csv`, toCSV(callsIn, [
+      run: () => downloadCSV(`call-log-${slug}.csv`, toCSV(callsIn, [
         { label: "Date", value: (r) => r.date },
         { label: "Name", value: (r) => r.name },
         { label: "Lead Source", value: (r) => r.source },
@@ -56,7 +76,7 @@ export default function Reports() {
     {
       title: "Revenue",
       desc: `${paymentsIn.length} client payments in ${label}.`,
-      run: () => downloadCSV(`revenue-${month}.csv`, toCSV(paymentsIn, [
+      run: () => downloadCSV(`revenue-${slug}.csv`, toCSV(paymentsIn, [
         { label: "Date", value: (r) => r.date },
         { label: "Client", value: (r) => r.client_name },
         { label: "Category", value: (r) => r.category },
@@ -67,7 +87,7 @@ export default function Reports() {
     {
       title: "Cash Collected",
       desc: `${payoutsIn.length} Stripe ${payoutsIn.length === 1 ? "payout" : "payouts"} in ${label}.`,
-      run: () => downloadCSV(`cash-collected-${month}.csv`, toCSV(payoutsIn, [
+      run: () => downloadCSV(`cash-collected-${slug}.csv`, toCSV(payoutsIn, [
         { label: "Date", value: (r) => r.date },
         { label: "Amount", value: (r) => Number(r.amount || 0).toFixed(2) },
         { label: "Notes", value: (r) => r.notes || "" },
@@ -76,7 +96,7 @@ export default function Reports() {
     {
       title: "Expenses",
       desc: `${expensesIn.length} expenses in ${label}.`,
-      run: () => downloadCSV(`expenses-${month}.csv`, toCSV(expensesIn, [
+      run: () => downloadCSV(`expenses-${slug}.csv`, toCSV(expensesIn, [
         { label: "Date", value: (r) => r.date },
         { label: "Category", value: (r) => r.category },
         { label: "Description", value: (r) => r.description || "" },
@@ -86,7 +106,7 @@ export default function Reports() {
     {
       title: "New Clients",
       desc: `${clientsIn.length} ${clientsIn.length === 1 ? "client" : "clients"} acquired in ${label}.`,
-      run: () => downloadCSV(`new-clients-${month}.csv`, toCSV(clientsIn, [
+      run: () => downloadCSV(`new-clients-${slug}.csv`, toCSV(clientsIn, [
         { label: "Name", value: (r) => r.name },
         { label: "Date Acquired", value: (r) => r.date_acquired },
         { label: "Status", value: (r) => r.status },
@@ -95,7 +115,7 @@ export default function Reports() {
     },
     {
       title: "Full Summary",
-      desc: "Every KPI for the month as Section / Metric / Value.",
+      desc: "Every KPI for the period as Section / Metric / Value.",
       run: () => {
         const csvValue = (v, kind) => {
           if (v === null || v === undefined) return "No data";
@@ -105,6 +125,11 @@ export default function Reports() {
           return v;
         };
         const rows = [
+          // Stated up front so a downloaded file is never ambiguous about the
+          // span it covers — especially once a range crosses several months.
+          ["Period", "Label", label],
+          ["Period", "Start Date", start],
+          ["Period", "End Date", end],
           ["Revenue", "Total Revenue (charged to clients)", csvValue(revenue.total, "money")],
           ["Revenue", "New Client Revenue", csvValue(revenue.newClientRev, "money")],
           ["Revenue", "Existing Client Revenue", csvValue(revenue.existingRev, "money")],
@@ -137,7 +162,7 @@ export default function Reports() {
           ["Acquisition", "Revenue per Attended Call", csvValue(acquisition.revPerAttendedCall, "money")],
         ].map(([section, metric, value]) => ({ section, metric, value }));
 
-        downloadCSV(`summary-${month}.csv`, toCSV(rows, [
+        downloadCSV(`summary-${slug}.csv`, toCSV(rows, [
           { label: "Section", value: (r) => r.section },
           { label: "Metric", value: (r) => r.metric },
           { label: "Value", value: (r) => r.value },
@@ -151,9 +176,29 @@ export default function Reports() {
       <div className="page-header">
         <div>
           <div className="page-title">Monthly Reports</div>
-          <div className="page-subtitle">Snapshot and exports for {label}</div>
+          <div className="page-subtitle">Snapshot and exports for {label} · {start} to {end}</div>
         </div>
-        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+        <div className="header-actions">
+          <div className="mode-toggle">
+            <button
+              className={mode === "month" ? "active" : ""}
+              onClick={() => setMode("month")}
+            >
+              Single Month
+            </button>
+            <button
+              className={mode === "range" ? "active" : ""}
+              onClick={() => setMode("range")}
+            >
+              Date Range
+            </button>
+          </div>
+          {mode === "month" ? (
+            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+          ) : (
+            <DateRangeSelector {...range.selectorProps} />
+          )}
+        </div>
       </div>
 
       <div className="grid-2">
